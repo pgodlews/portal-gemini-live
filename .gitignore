@@ -1,0 +1,38 @@
+# Local build and IDE state
+.gradle/
+.kotlin/
+build/
+**/build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+
+# Credentials, signing material, device data and diagnostic output
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+signing.properties
+secrets.properties
+google-services.json
+*.log
+*.hprof
+*.db
+*.sqlite*
+captures/
+exports/
+
+# Rebuild binaries locally; do not publish captured screens or private notes
+dist/
+*.apk
+*.aab
+screenshots/
+grok47-review.md
+PORTAL_AUDIO_HARDWARE_GUIDE.md
