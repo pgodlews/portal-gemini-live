@@ -36,6 +36,121 @@ The client uses the `v1alpha` `BidiGenerateContent` endpoint. The API key is a q
 
 Audio and camera sends are gated on the connected state. Muting audio stops transmission but retains local capture for amplitude visualization. Camera standby stops frame transmission while retaining the local preview. Incoming interruption events flush playback. Transcript state remains in memory until exported or cleared.
 
+## Live session lifecycle
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Main as MainActivity
+    participant Rec as AudioRecorder
+    participant Cam as PortalCameraManager
+    participant Client as GeminiLiveClient
+    participant Player as AudioPlayer
+    participant API as Gemini Live API
+
+    User->>Main: Start Gemini Live
+    Main->>Cam: Set mode (STANDBY if voice-only, else CONTINUOUS)
+    Main->>Rec: start()
+    Main->>Client: connect(config)
+    Client->>API: Open TLS WebSocket
+    Client-->>Main: INITIALIZING
+    Client->>API: Setup (model, voice, transcription, system prompt)
+    API-->>Client: setupComplete
+    Client-->>Main: CONNECTED
+
+    loop Unmuted and connected
+        Rec->>Client: 16 kHz PCM chunk
+        Client->>API: realtime_input audio
+    end
+    Note over Rec: Muted: capture and local amplitude continue, nothing is sent
+
+    loop Camera streaming and connected
+        Cam->>Client: JPEG frame
+        Client->>API: realtime_input image
+    end
+
+    API-->>Client: serverContent audio and transcripts
+    Client-->>Player: 24 kHz PCM queued for playback
+    API-->>Client: serverContent interrupted
+    Client-->>Player: Flush queued playback
+    API-->>Client: serverContent turnComplete
+    Client-->>Main: Update turn state and telemetry
+
+    User->>Main: Stop
+    Main->>Client: disconnect()
+    Main->>Rec: stop()
+    Main->>Player: interrupt()
+```
+
+## Connection states
+
+```mermaid
+stateDiagram-v2
+    [*] --> DISCONNECTED
+    DISCONNECTED --> CONNECTING: connect()
+    CONNECTING --> INITIALIZING: WebSocket open, setup sent
+    INITIALIZING --> CONNECTED: setupComplete
+    CONNECTING --> ERROR: connection failure
+    INITIALIZING --> ERROR: connection failure
+    CONNECTED --> ERROR: connection failure
+    CONNECTING --> DISCONNECTED: closed
+    INITIALIZING --> DISCONNECTED: closed
+    CONNECTED --> DISCONNECTED: closed or disconnect()
+    ERROR --> CONNECTING: connect()
+    ERROR --> DISCONNECTED: disconnect()
+```
+
+Audio and camera sends are gated on `CONNECTED`. Reconnect attempts that arrive while the client is `CONNECTING`, `INITIALIZING`, or `CONNECTED` are ignored.
+
+## Camera modes
+
+```mermaid
+stateDiagram-v2
+    [*] --> STANDBY
+    STANDBY --> CONTINUOUS: toggleStreaming()
+    CONTINUOUS --> STANDBY: toggleStreaming()
+    STANDBY --> AUTO: triggerAutoCamera()
+    AUTO --> STANDBY: triggerAutoCamera()
+    note right of STANDBY : Local preview only, no frames sent
+    note right of AUTO : Frames sent while active
+    note right of CONTINUOUS : Frames sent at the configured rate
+```
+
+Preview runs in every mode. Only `STANDBY` stops frame transmission. The mode is set when a session starts and changed from the camera controls.
+
+## Local setup and export
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Phone as Phone browser
+    participant Portal as MainActivity
+    participant Server as PortalHttpServer
+    participant Prefs as Private SharedPreferences
+
+    rect rgb(240, 240, 240)
+    Note over Portal,Server: Setup mode, random token in the QR link, plain HTTP on a trusted network
+    Portal->>Server: Start server, show QR code
+    Phone->>Server: GET setup page with token
+    Server-->>Phone: Setup form, Cache-Control no-store
+    Phone->>Server: POST /api/setup with token
+    Server->>Portal: onConfigReceived(key, model, voice)
+    Portal->>Prefs: Save settings
+    end
+
+    rect rgb(240, 240, 240)
+    Note over Portal,Server: Export mode, snapshot of in-memory history
+    Portal->>Server: Start export server with message snapshot, show QR code
+    Phone->>Server: GET /export with token
+    Server-->>Phone: Export page with download links
+    Phone->>Server: GET /export/download?format=md, txt, or html, with token
+    Server-->>Phone: Transcript file
+    end
+```
+
+Setup and export each run on their own server instance with a full random UUID token. Both transfers are unencrypted HTTP, so use them only on a trusted private network.
+
 ## Configuration and privacy
 
 Settings are persisted in `gemini_prefs` using private Android `SharedPreferences`. The key is supplied at runtime and is not included in the build. Android app backup is disabled. The local setup page does not prefill the stored key.
